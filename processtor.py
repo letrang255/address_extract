@@ -1,6 +1,7 @@
-#author: hieu.tran5 (nlp team)
-#user: trang.le4
+#author hieu.tran5 (nlp_team)
+#user trang.le4
 
+import copy
 import math
 import unicodedata
 from symspellpy import SymSpell, Verbosity
@@ -9,8 +10,7 @@ import os
 import re
 import json
 import string
-# from momo.sciences.nlp.address_extract.utils import remove_accents, remove_all_special_tokens
-from utils import remove_accents, remove_all_special_tokens
+from momo.sciences.nlp.address_extract.utils import remove_accents, remove_all_special_tokens
 
 EMPTY_STRING = ''
 SPACE_SYMBOL = ' '
@@ -25,9 +25,7 @@ def load_txt_file(cur_dir_path, filename, separator=None):
 
 class IDCardProcessor:
   def __init__(self, max_distance=2):
-    # cur_dir_path = os.path.dirname(os.path.realpath(__file__))
-    # print('cur_dir_path is', cur_dir_path)
-    cur_dir_path = '/tmp'
+    cur_dir_path = os.path.dirname(os.path.realpath(__file__))
     self.max_distance = max_distance
     self.sym_spell = SymSpell(max_dictionary_edit_distance=5, prefix_length=7)
     # term_index is the column of the term and count_index is the
@@ -51,11 +49,13 @@ class IDCardProcessor:
     self.first_name_list = json.load(open(os.path.join(cur_dir_path, 'resources/first_name.json'), 'r'))
     self.popular_first_name = ['nguyễn', 'phạm', 'đặng', 'thạch']
     self.exception_units = load_txt_file(cur_dir_path, 'resources/address_exception_units.txt', separator='|')
+    self.best_supported_country = 'Việt Nam|Vietnam|country'
 
   def compute_distance(self, str_1, str_2, max_distance):
     norm_1, norm_2 = remove_accents(str_1), remove_accents(str_2)
-    dist_1, dist_2 = self.distance.compare(str_1, str_2, max_distance), self.distance.compare(norm_1, norm_2, max_distance)
-    return (dist_1+dist_2)/2
+    dist_1, dist_2 = self.distance.compare(str_1, str_2, max_distance), self.distance.compare(norm_1, norm_2,
+                                                                                              max_distance)
+    return (dist_1 + dist_2) / 2
 
   @staticmethod
   def common_process(text):
@@ -89,11 +89,12 @@ class IDCardProcessor:
 
   @staticmethod
   def filter_by_length(raw_text, corrected_text):
-    if not corrected_text or len(corrected_text) < 0.5*len(raw_text):
+    if not corrected_text or len(corrected_text) < 0.5 * len(raw_text):
       corrected_text = raw_text
     return corrected_text
 
-  def _measure_distance(self, span_unit_str: str, unit: str, max_distance: int = -1, use_acronym: bool = False, edit_ratio: float = 0.2):
+  def _measure_distance(self, span_unit_str: str, unit: str, max_distance: int = -1, use_acronym: bool = False,
+      edit_ratio: float = 0.2):
     def gen_acronym(unit):
       def check_tok_condition(tok):
         return tok not in self.unit_prefixes and not tok.isnumeric()
@@ -120,7 +121,7 @@ class IDCardProcessor:
     is_acronym = False
     for alias in unit.split('|'):
       if max_distance == -1:
-        max_distance = min(round(edit_ratio*len(alias)), 3)
+        max_distance = min(round(edit_ratio * len(alias)), 3)
       full_unit = self.distance.compare(alias.lower(), span_unit_str.lower(), max_distance)
       if min_score > full_unit >= 0:
         min_score = full_unit
@@ -168,16 +169,17 @@ class IDCardProcessor:
       if span_unit:
         span_unit_str = ' '.join(span_unit[::-1])
         for unit in addr_dict:
+          unit, level = unit.rsplit('|', 1)
           cur_score, cur_unit, is_acronym = self._measure_distance(span_unit_str,
                                                                    unit,
                                                                    use_acronym=True,
                                                                    edit_ratio=edit_ratio)
           if best_score >= cur_score >= 0:
             if best_score > cur_score:
-              best_unit = [(cur_unit, unit, span_unit_str, is_acronym), ]
+              best_unit = [(cur_unit, unit, span_unit_str, level), ]
               best_idx = [sub_i, ]
             else:
-              best_unit.append((cur_unit, unit, span_unit_str, is_acronym))
+              best_unit.append((cur_unit, unit, span_unit_str, level))
               best_idx.append(sub_i)
             best_score = cur_score
     return best_unit, best_score, best_idx
@@ -206,17 +208,21 @@ class IDCardProcessor:
         cur_unit_scores = []
         for pf in prefixes:
           if best_unit[0].startswith(pf[0]):
-            best_unit = (' '.join([pf[1], ] + best_unit[0].split()[1:]), best_unit[1], best_unit[2], best_unit[3])
+            best_unit = (
+              ' '.join([pf[1], ] + best_unit[0].split()[1:]), best_unit[1], best_unit[2], best_unit[3])
             break
         for exp_unit in self.exception_units:
           if best_unit[0] == exp_unit[0]:
-            best_unit = (exp_unit[1], best_unit[1], best_unit[2], True)
+            best_unit = (exp_unit[1], best_unit[1], best_unit[2], best_unit[3])
         cur_parsed_units.append(best_unit)
         cur_unit_scores.append(best_score)
         idx = best_idx
         num_attempts = 0
         if type(current_addr_dict) != list:
-          lower_parsed_units, lower_unit_scores = self.parse_address(idx-1, current_addr_dict[cur_parsed_units[-1][1]], 0, segmented_tokens, edit_ratio)
+          lower_parsed_units, lower_unit_scores = self.parse_address(
+              idx - 1, current_addr_dict[f"{cur_parsed_units[-1][1]}|{cur_parsed_units[-1][-1]}"],
+              0, segmented_tokens, edit_ratio
+          )
           cur_parsed_units = cur_parsed_units + lower_parsed_units
           cur_unit_scores = cur_unit_scores + lower_unit_scores
         if cur_parsed_units:
@@ -245,11 +251,19 @@ class IDCardProcessor:
 
     return self.parse_address(idx - 1, current_addr_dict, num_attempts, segmented_tokens, edit_ratio)
 
+  @staticmethod
+  def preprocess_address(address):
+    address = address.strip().split('<br>', 1)[0]
+    address = re.sub(r'([a-z0-9]+-[a-z0-9]+){4,}$', '', address)
+    address = re.sub(r'(hotline|SĐT(:| )).+$', '', address, flags=re.IGNORECASE)
+    return address
+
   def correct_normalize_address(self, text, option=1):
     if text is None or text.lower() == 'null' or text.lower() == 'n/a' or len(text) < 2:
       return text, 0.5, True, False
 
     address = self.common_process(text)
+    address = self.preprocess_address(address)
     try:
       result = self.sym_spell.word_segmentation(address, max_edit_distance=0)
     except:
@@ -262,13 +276,13 @@ class IDCardProcessor:
     else:
       segmented_tokens = [EMPTY_STRING, ] + re.sub(r"([!\"#$%&'()*+,-./:;<=>?@\[\]^_`{|}~])", SPACE_SYMBOL,
                                                    result.corrected_string).split()
-    tmp_addr_dict = self.address_dict
+    tmp_addr_dict = copy.deepcopy(self.address_dict)
+    tmp_addr_dict[self.best_supported_country] = self.address_dict
     idx = len(segmented_tokens) - 1
     num_attempts = -1
     parsed_units, unit_scores = self.parse_address(idx, tmp_addr_dict, num_attempts, segmented_tokens, edit_ratio=0.3)
     total_score = sum([(1 - score / len(unit[0])) if score != math.inf else 0.5 for unit, score in
                        zip(parsed_units, unit_scores)])
-    start_from_district = False
 
     # Look for district level when can not detect city level.
     if not parsed_units:
@@ -277,23 +291,26 @@ class IDCardProcessor:
         tmp_addr_dict = self.address_dict[city]
         idx = len(segmented_tokens) - 1
         num_attempts = 0
-        cur_parsed_units, cur_unit_scores = self.parse_address(idx, tmp_addr_dict, num_attempts, segmented_tokens, edit_ratio=0.2)
+        cur_parsed_units, cur_unit_scores = self.parse_address(idx, tmp_addr_dict, num_attempts,
+                                                               segmented_tokens, edit_ratio=0.2)
         if cur_parsed_units:
-          cur_parsed_units.insert(0, (city.split('|')[0], city, "", False))
+          cur_parsed_units.insert(0, (city.split('|', 1)[0], city, "", city.rsplit('|', 1)[-1]))
           cur_unit_scores.insert(0, 0)
-          if not parsed_units \
-              or len(cur_parsed_units) > len(parsed_units) \
-              or cur_unit_scores[1] < unit_scores[1] \
-              or (cur_unit_scores[1] == unit_scores[1] and len(cur_parsed_units) == 3 and cur_unit_scores[2] < unit_scores[2]):
+          if (
+              not parsed_units
+              or len(cur_parsed_units) > len(parsed_units)
+              or cur_unit_scores[1] < unit_scores[1]
+              or (cur_unit_scores[1] == unit_scores[1]
+                  and len(cur_parsed_units) == 3 and cur_unit_scores[2] < unit_scores[2])
+          ):
             parsed_units = cur_parsed_units
-            start_from_district = True
             unit_scores = cur_unit_scores
-            total_score = sum([(1 - score/len(unit[0])) if score != math.inf else 0.5 for unit, score in zip(parsed_units, unit_scores)])
+            total_score = sum([(1 - score/len(unit[0])) if score != math.inf else 0.5
+                               for unit, score in zip(parsed_units, unit_scores)])
 
     # Copy street address
     addr_tokens = re.sub(r'([.,])([^0-9])', r'\1 \2', address).split()
-    street_start = None
-    if len(parsed_units) > 0:
+    if parsed_units:
       tmp_addr = ' '.join(addr_tokens)
       pattern_string = re.compile('\W*'.join(parsed_units[-1][2].lower().replace('\\', '').split()))
       best_k = None
@@ -325,25 +342,25 @@ class IDCardProcessor:
             best_k = k
             max_score = idx
         street_start = ' '.join(addr_tokens[:best_k])
-      street_start = re.sub(r'([^0-9])\s*-\s*([^0-9])', r'\1 \2', street_start.strip().strip(','))  # Remove `-` in text
+      street_start = re.sub(r'([^0-9])\s*-\s*([^0-9])?', r'\1 \2', street_start.strip().strip(','))
       total_score /= len(parsed_units)
-    
-    address_as_dict = self._format_output_as_dict(parsed_units, street_start, start_from_district)
+    else:
+      street_start = address
+
+    address_as_dict = self._format_output_as_dict(parsed_units, street_start)
     return address_as_dict
 
-  def _format_output_as_dict(self, parsed_units, street_start, start_from_district: bool):
+  @staticmethod
+  def _format_output_as_dict(parsed_units, street_start):
     outputs = {
+      'country': '',
       'city': '',
       'district': '',
       'ward': '',
       'street': ' '.join([u.capitalize() for u in street_start.split()]) if street_start else ''
     }
-    if start_from_district:
-      lvl = ['district', 'ward']
-    else:
-      lvl = ['city', 'district', 'ward']
     for idx, unit in enumerate(parsed_units):
-      outputs[lvl[idx]] = unit[0]
+      outputs[unit[3]] = unit[0]
     return outputs
 
   def correct_name(self, text):
@@ -451,9 +468,9 @@ class IDCardProcessor:
       no_limit = 'Không thời hạn'
       cur_score, _, _ = self._measure_distance(text,
                                                no_limit,
-                                               max_distance=int(0.5*len(no_limit)),
+                                               max_distance=int(0.5 * len(no_limit)),
                                                use_acronym=False)
-      if 0 <= cur_score != math.inf or len(re.findall('[^0-9\W]', text))/len(text) > 0.5:
+      if 0 <= cur_score != math.inf or len(re.findall('[^0-9\W]', text)) / len(text) > 0.5:
         is_modified = remove_all_special_tokens(no_limit) != remove_all_special_tokens(text)
         return no_limit, (1 - cur_score / len(no_limit)), is_modified
 
